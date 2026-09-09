@@ -3,6 +3,14 @@ import pandas as pd
 from fpdf import FPDF
 from datetime import datetime
 import io
+import os
+
+# ==============================================================================
+# 0. RUTAS FIJAS CONFIGURADAS
+# ==============================================================================
+RUTA_QUERY_HOY = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-hoy.xlsx"
+RUTA_QUERY_ANT = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-ant.xlsx"
+RUTA_REUBICADOS = r"Q:\GGYDPC\SGyCAPC\Administración del PC\REUBICADOS.xlsx"
 
 # --- 1. CONFIGURACIÓN Y ESTILOS ---
 COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)[cite: 2]
@@ -79,7 +87,6 @@ class PDF(FPDF):
                 else:
                     df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:,.0f}".replace(',', '.') if isinstance(x, (int, float)) else x)[cite: 2]
         
-        # Ajuste proporcional de anchos
         widths = {col: max(self.get_string_width(str(col)) + 5, df_formatted[col].astype(str).apply(lambda x: self.get_string_width(x[:30])).max() + 5) for col in df_formatted.columns}
         total_width = sum(widths.values())[cite: 2]
         if total_width > self.page_width:[cite: 2]
@@ -221,12 +228,10 @@ def procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro):
     if df_reub_desap.empty:
         return pd.DataFrame()[cite: 2]
     
-    # Nos quedamos EXCLUSIVAMENTE con los datos anteriores necesarios (sin arrastrar 'Fecha' de la query)
     cols_base = ['Nº pers.', 'Apellido', 'Nombre de pila', 'Línea', 'Categoría']
     base = df_reub_desap[[c for c in cols_base if c in df_reub_desap.columns]].copy()
     base.rename(columns={'Línea': 'Línea Anterior', 'Categoría': 'Gr.prof. Anterior'}, inplace=True)[cite: 2]
 
-    # Columnas esperadas en el PDF
     cols_finales = [
         'Nº pers.', 'Apellido', 'Nombre de pila', 'Desde',
         'Línea Anterior', 'Gr.prof. Anterior', 
@@ -242,18 +247,15 @@ def procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro):
     m = df_reub_maestro.copy()[cite: 2]
     m.columns = [str(c).strip() for c in m.columns]
     
-    # Identificar columna Legajo
     col_leg = 'Legajo' if 'Legajo' in m.columns else ('Nº pers.' if 'Nº pers.' in m.columns else m.columns[0])
     m['LEG_MATCH'] = m[col_leg].apply(limpiar_legajo)
 
-    # Identificar y renombrar la columna Fecha a 'Desde' ANTES de unir
     col_fecha = 'Fecha' if 'Fecha' in m.columns else next((c for c in m.columns if 'fecha' in c.lower()), None)
     if col_fecha:
         m['Desde'] = pd.to_datetime(m[col_fecha], errors='coerce', dayfirst=True).dt.strftime('%d/%m/%Y').fillna('-')
     else:
         m['Desde'] = '-'
 
-    # Columnas del maestro a transferir
     cols_m = ['LEG_MATCH', 'Desde']
     for c_std in ['Línea Nueva', 'Gr.prof. Nuevo', 'Área/ Posicion/ Función Nueva', 'Nuevo CCT']:
         match = next((c for c in m.columns if c_std.lower() in c.lower()), None)
@@ -261,7 +263,6 @@ def procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro):
             m.rename(columns={match: c_std}, inplace=True)
             cols_m.append(c_std)
 
-    # Merge seguro
     merged = pd.merge(base, m[cols_m].drop_duplicates(subset=['LEG_MATCH']), left_on='Nº pers.', right_on='LEG_MATCH', how='left')
 
     for c in cols_finales:
@@ -284,7 +285,6 @@ def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas
     has_recat = df_recat is not None and not df_recat.empty[cite: 2]
     has_linea = df_cambio_linea is not None and not df_cambio_linea.empty[cite: 2]
 
-    # Bajas demoradas
     notas_demora = [][cite: 2]
     if not df_bajas.empty:[cite: 2]
         ayer = pd.to_datetime(datetime.now()) - pd.Timedelta(days=1)[cite: 2]
@@ -354,128 +354,112 @@ def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas
     return pdf.output(dest='S').encode('latin-1', 'replace')[cite: 2]
 
 # --- 4. INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Control de Dotación - Diario", layout="wide")[cite: 2]
-st.title("📋 Control Diario de Dotación")[cite: 2]
-st.markdown("Arrastre o seleccione los **3 archivos Excel** de una sola vez. Cuando estén listos, presione el botón.")
+st.set_page_config(page_title="Control Diario de Dotación", layout="wide")
+st.title("⚡ Control Diario Automatizado")
 
-archivos_cargados = st.file_uploader(
-    "📂 Subir archivos (query-hoy, query-ant y reubicados)", 
-    type=['xlsx'], 
-    accept_multiple_files=True
-)
+hay_hoy = os.path.exists(RUTA_QUERY_HOY)
+hay_ant = os.path.exists(RUTA_QUERY_ANT)
+hay_reub = os.path.exists(RUTA_REUBICADOS)
 
-file_hoy = None
-file_ant = None
-file_reub = None
+c1, c2, c3 = st.columns(3)
+if hay_hoy: c1.success(f"✅ query-hoy detectado\n\n`{RUTA_QUERY_HOY}`")
+else: c1.error(f"❌ No se encuentra query-hoy\n\n`{RUTA_QUERY_HOY}`")
 
-if archivos_cargados:
-    for f in archivos_cargados:
-        name = f.name.lower()
-        if "hoy" in name:
-            file_hoy = f
-        elif "ant" in name or "ayer" in name:
-            file_ant = f
-        elif "reub" in name:
-            file_reub = f
+if hay_ant: c2.success(f"✅ query-ant detectado\n\n`{RUTA_QUERY_ANT}`")
+else: c2.error(f"❌ No se encuentra query-ant\n\n`{RUTA_QUERY_ANT}`")
 
-    c1, c2, c3 = st.columns(3)
-    c1.info(f"📁 Query Hoy: **{file_hoy.name if file_hoy else '❌ Falta cargar'}**")
-    c2.info(f"📁 Query Ayer: **{file_ant.name if file_ant else '❌ Falta cargar'}**")
-    c3.info(f"📁 Reubicados: **{file_reub.name if file_reub else '⚠️ Opcional / No detectado'}**")
+if hay_reub: c3.success(f"✅ reubicados detectado\n\n`{RUTA_REUBICADOS}`")
+else: c3.warning(f"⚠️ reubicados no detectado (Opcional)\n\n`{RUTA_REUBICADOS}`")
 
-    if file_hoy and file_ant:
-        if st.button("🚀 Procesar y Generar Reporte", type="primary"):
-            try:
-                with st.spinner("Procesando datos y generando reporte..."):
-                    df_hoy_raw = pd.read_excel(file_hoy, sheet_name=0, engine='openpyxl')[cite: 2]
-                    df_ant_raw = pd.read_excel(file_ant, sheet_name=0, engine='openpyxl')[cite: 2]
-                    
-                    df_reub_maestro = pd.DataFrame()[cite: 2]
-                    if file_reub:
-                        try:
-                            # Intenta leer pestaña REUBICADOS, si no la primera
-                            try: df_reub_maestro = pd.read_excel(file_reub, sheet_name='REUBICADOS', engine='openpyxl')[cite: 2]
-                            except: df_reub_maestro = pd.read_excel(file_reub, sheet_name=0, engine='openpyxl')[cite: 2]
-                        except Exception as e:
-                            st.warning(f"No se pudo leer el archivo maestro de reubicados: {e}")[cite: 2]
+st.markdown("---")
 
-                    df_hoy = normalizar_query(df_hoy_raw)[cite: 2]
-                    df_ant = normalizar_query(df_ant_raw)[cite: 2]
+if hay_hoy and hay_ant:
+    if st.button("🚀 Procesar y Generar Reporte", type="primary"):
+        try:
+            with st.spinner("Leyendo archivos y generando reporte..."):
+                df_hoy_raw = pd.read_excel(RUTA_QUERY_HOY, sheet_name=0, engine='openpyxl')
+                df_ant_raw = pd.read_excel(RUTA_QUERY_ANT, sheet_name=0, engine='openpyxl')
+                
+                df_reub_maestro = pd.DataFrame()[cite: 2]
+                if hay_reub:
+                    try:
+                        try: df_reub_maestro = pd.read_excel(RUTA_REUBICADOS, sheet_name='REUBICADOS', engine='openpyxl')
+                        except: df_reub_maestro = pd.read_excel(RUTA_REUBICADOS, sheet_name=0, engine='openpyxl')
+                    except Exception as e:
+                        st.warning(f"No se pudo leer el archivo de reubicados: {e}")
 
-                    # Foto de activos anterior
-                    df_act_ant = df_ant[df_ant['Status ocupación'] == 'Activo'].copy()[cite: 2]
-                    legs_act_ant = set(df_act_ant['Nº pers.'])[cite: 2]
-                    legs_hoy = set(df_hoy['Nº pers.'])[cite: 2]
+                df_hoy = normalizar_query(df_hoy_raw)
+                df_ant = normalizar_query(df_ant_raw)
 
-                    # Altas y Bajas
-                    df_alt_r = df_hoy[~df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Activo')].copy()[cite: 2]
-                    df_baj_r = df_hoy[df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Dado de baja')].copy()[cite: 2]
+                df_act_ant = df_ant[df_ant['Status ocupación'] == 'Activo'].copy()[cite: 2]
+                legs_act_ant = set(df_act_ant['Nº pers.'])[cite: 2]
+                legs_hoy = set(df_hoy['Nº pers.'])[cite: 2]
 
-                    if not df_baj_r.empty: 
-                        df_baj_r['Desde'] = df_baj_r['Desde'] - pd.Timedelta(days=1)[cite: 2]
-                        df_baj_r = df_baj_r.sort_values(by='Desde', ascending=True)[cite: 2]
-                    if not df_alt_r.empty: 
-                        df_alt_r = df_alt_r.sort_values(by='Fecha', ascending=True)[cite: 2]
+                df_alt_r = df_hoy[~df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Activo')].copy()[cite: 2]
+                df_baj_r = df_hoy[df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Dado de baja')].copy()[cite: 2]
 
-                    # Reubicados
-                    desap_legs = legs_act_ant - legs_hoy[cite: 2]
-                    df_reub_desap = df_act_ant[df_act_ant['Nº pers.'].isin(desap_legs)].copy()[cite: 2]
-                    df_reub_completo = procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro)[cite: 2]
+                if not df_baj_r.empty: 
+                    df_baj_r['Desde'] = df_baj_r['Desde'] - pd.Timedelta(days=1)[cite: 2]
+                    df_baj_r = df_baj_r.sort_values(by='Desde', ascending=True)[cite: 2]
+                if not df_alt_r.empty: 
+                    df_alt_r = df_alt_r.sort_values(by='Fecha', ascending=True)[cite: 2]
 
-                    hoy = pd.to_datetime(datetime.now())[cite: 2]
-                    
-                    df_baj = df_baj_r.copy()[cite: 2]
-                    if not df_baj.empty:[cite: 2]
-                        df_baj['Antigüedad'] = df_baj.apply(lambda r: calcular_años(r['Fecha'], r['Desde']), axis=1)[cite: 2]
-                        df_baj['Edad'] = df_baj.apply(lambda r: calcular_años(r['Fecha nac.'], r['Desde']), axis=1)[cite: 2]
-                        df_baj_vis = df_baj.copy()[cite: 2]
-                        df_baj_vis['Antigüedad'] = df_baj_vis['Antigüedad'].apply(lambda x: int(round(x)))[cite: 2]
-                        df_baj_vis['Fecha nac.'] = df_baj_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')[cite: 2]
-                        df_baj_vis['Desde_DT'] = df_baj_vis['Desde'][cite: 2]
-                        df_baj_vis['Desde'] = df_baj_vis['Desde'].dt.strftime('%d/%m/%Y')[cite: 2]
-                    else: df_baj_vis = pd.DataFrame()[cite: 2]
+                desap_legs = legs_act_ant - legs_hoy[cite: 2]
+                df_reub_desap = df_act_ant[df_act_ant['Nº pers.'].isin(desap_legs)].copy()[cite: 2]
+                df_reub_completo = procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro)
 
-                    df_alt = df_alt_r.copy()[cite: 2]
-                    if not df_alt.empty:[cite: 2]
-                        df_alt['Antigüedad'] = df_alt.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)[cite: 2]
-                        df_alt['Edad'] = df_alt.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)[cite: 2]
-                        df_alt_vis = df_alt.copy()[cite: 2]
-                        df_alt_vis['Fecha'] = df_alt_vis['Fecha'].dt.strftime('%d/%m/%Y')[cite: 2]
-                        df_alt_vis['Fecha nac.'] = df_alt_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')[cite: 2]
-                    else: df_alt_vis = pd.DataFrame()[cite: 2]
+                hoy = pd.to_datetime(datetime.now())[cite: 2]
+                
+                df_baj = df_baj_r.copy()[cite: 2]
+                if not df_baj.empty:[cite: 2]
+                    df_baj['Antigüedad'] = df_baj.apply(lambda r: calcular_años(r['Fecha'], r['Desde']), axis=1)[cite: 2]
+                    df_baj['Edad'] = df_baj.apply(lambda r: calcular_años(r['Fecha nac.'], r['Desde']), axis=1)[cite: 2]
+                    df_baj_vis = df_baj.copy()[cite: 2]
+                    df_baj_vis['Antigüedad'] = df_baj_vis['Antigüedad'].apply(lambda x: int(round(x)))[cite: 2]
+                    df_baj_vis['Fecha nac.'] = df_baj_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')[cite: 2]
+                    df_baj_vis['Desde_DT'] = df_baj_vis['Desde'][cite: 2]
+                    df_baj_vis['Desde'] = df_baj_vis['Desde'].dt.strftime('%d/%m/%Y')[cite: 2]
+                else: df_baj_vis = pd.DataFrame()[cite: 2]
 
-                    df_recat = procesar_recategorizaciones(df_hoy, df_act_ant)[cite: 2]
-                    df_cambio_l = procesar_cambios_linea(df_hoy, df_act_ant)[cite: 2]
+                df_alt = df_alt_r.copy()[cite: 2]
+                if not df_alt.empty:[cite: 2]
+                    df_alt['Antigüedad'] = df_alt.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)[cite: 2]
+                    df_alt['Edad'] = df_alt.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)[cite: 2]
+                    df_alt_vis = df_alt.copy()[cite: 2]
+                    df_alt_vis['Fecha'] = df_alt_vis['Fecha'].dt.strftime('%d/%m/%Y')[cite: 2]
+                    df_alt_vis['Fecha nac.'] = df_alt_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')[cite: 2]
+                else: df_alt_vis = pd.DataFrame()[cite: 2]
 
-                    df_act_hoy = df_hoy[df_hoy['Status ocupación'] == 'Activo'].copy()[cite: 2]
-                    df_act_hoy['Antigüedad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)[cite: 2]
-                    df_act_hoy['Edad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)[cite: 2]
+                df_recat = procesar_recategorizaciones(df_hoy, df_act_ant)[cite: 2]
+                df_cambio_l = procesar_cambios_linea(df_hoy, df_act_ant)[cite: 2]
 
-                    res_act = generar_resumen_completo(df_act_hoy)[cite: 2]
-                    res_alt = generar_resumen_completo(df_alt, incluir_promedios=False)[cite: 2]
-                    res_baj = generar_resumen_completo(df_baj)[cite: 2]
-                    res_baj_linea = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Línea'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()[cite: 2]
-                    res_baj_cat = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Categoría'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()[cite: 2]
+                df_act_hoy = df_hoy[df_hoy['Status ocupación'] == 'Activo'].copy()[cite: 2]
+                df_act_hoy['Antigüedad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)[cite: 2]
+                df_act_hoy['Edad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)[cite: 2]
 
-                    pdf_bytes = crear_pdf_reporte_diario(
-                        datetime.now().strftime('%d/%m/%Y'),[cite: 2]
-                        df_alt_vis, df_baj_vis,[cite: 2]
-                        res_alt, res_baj, res_act,[cite: 2]
-                        res_baj_linea, res_baj_cat,[cite: 2]
-                        df_reub_completo, df_recat, df_cambio_l[cite: 2]
-                    )
+                res_act = generar_resumen_completo(df_act_hoy)[cite: 2]
+                res_alt = generar_resumen_completo(df_alt, incluir_promedios=False)[cite: 2]
+                res_baj = generar_resumen_completo(df_baj)[cite: 2]
+                res_baj_linea = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Línea'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()[cite: 2]
+                res_baj_cat = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Categoría'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()[cite: 2]
 
-                    st.success("✅ Reporte generado exitosamente.")
-                    st.download_button(
-                        "📄 Descargar Reporte Diario de Dotación",[cite: 2]
-                        pdf_bytes,[cite: 2]
-                        f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",[cite: 2]
-                        "application/pdf"[cite: 2]
-                    )
+                pdf_bytes = crear_pdf_reporte_diario(
+                    datetime.now().strftime('%d/%m/%Y'),[cite: 2]
+                    df_alt_vis, df_baj_vis,[cite: 2]
+                    res_alt, res_baj, res_act,[cite: 2]
+                    res_baj_linea, res_baj_cat,[cite: 2]
+                    df_reub_completo, df_recat, df_cambio_l[cite: 2]
+                )
 
-            except Exception as e:
-                st.error(f"Error al procesar los archivos: {e}")
-    else:
-        st.warning("⚠️ Asegúrese de haber seleccionado los archivos correspondientes a **hoy** y **ayer**.")
+                st.success("✅ Reporte procesado exitosamente.")
+                st.download_button(
+                    "📄 Descargar Reporte Diario de Dotación",[cite: 2]
+                    pdf_bytes,[cite: 2]
+                    f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",[cite: 2]
+                    "application/pdf"[cite: 2]
+                )
+
+        except Exception as e:
+            st.error(f"Error al procesar los archivos: {e}")
 else:
-    st.info("💡 Arrastre los 3 archivos aquí para comenzar.")
+    st.info("💡 Asegurate de que los archivos 'query-hoy' y 'query-ant' existan en tu Escritorio.")
