@@ -2,17 +2,26 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 from datetime import datetime
-import io
 import os
+import base64
+import streamlit.components.v1 as components
 
-# ==============================================================================
-# 0. CONFIGURACIÓN DE RUTAS
-# ==============================================================================
-RUTA_QUERY_HOY = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-hoy.xlsx"
-RUTA_QUERY_ANT = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-ant.xlsx"
-RUTA_REUBICADOS = r"Q:\GGYDPC\SGyCAPC\Administración del PC\REUBICADOS.xlsx"
+# --- FUNCIÓN DE DESCARGA AUTOMÁTICA DIRECTA ---
+def descargar_automatico(datos_bytes, nombre_archivo):
+    b64 = base64.b64encode(datos_bytes).decode()
+    js_code = f"""
+    <script>
+        var a = document.createElement('a');
+        a.href = 'data:application/pdf;base64,{b64}';
+        a.download = '{nombre_archivo}';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
 
-# --- 1. CONFIGURACIÓN Y ESTILOS ---
+# --- CONFIGURACIÓN DE COLORES Y ESTILOS DEL PDF ---
 COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)
 COLOR_FONDO_CABECERA_TABLA = (70, 130, 180)
 COLOR_GRIS_FONDO_FILA = (240, 242, 246)
@@ -128,7 +137,7 @@ class PDF(FPDF):
             self.ln()
         self.ln(8)
 
-# --- 2. LÓGICA DE CÁLCULO ---
+# --- LÓGICA DE TRANSFORMACIÓN DE DATOS ---
 def calcular_años(fecha_inicio, fecha_fin):
     if pd.isna(fecha_inicio) or pd.isna(fecha_fin):
         return 0
@@ -292,7 +301,7 @@ def procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro):
 
     return merged[cols_finales]
 
-# --- 3. GENERADOR DE PDF ---
+# --- GENERADOR DE DOCUMENTO PDF ---
 def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas, res_activos, res_bajas_linea, res_bajas_cat, df_reub=None, df_recat=None, df_cambio_linea=None):
     pdf = PDF(orientation='L', unit='mm', format='A4')
     pdf.report_title = "Resumen Diario de Dotación"
@@ -372,56 +381,62 @@ def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas
 
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- 4. INTERFAZ STREAMLIT ---
+# --- INTERFAZ LOCAL DE STREAMLIT ---
 st.set_page_config(page_title="Control Diario de Dotación", layout="wide")
-st.title("⚡ Control Diario Automatizado")
+st.title("📋 Control Diario de Dotación")
 
-hay_hoy = os.path.exists(RUTA_QUERY_HOY)
-hay_ant = os.path.exists(RUTA_QUERY_ANT)
-hay_reub = os.path.exists(RUTA_REUBICADOS)
+# Rutas locales y de red
+RUTA_HOY = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-hoy.xlsx"
+RUTA_ANT = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-ant.xlsx"
+RUTA_REUB = r"Q:\GGYDPC\SGyCAPC\Administración del PC\REUBICADOS.xlsx"
+
+existe_hoy = os.path.exists(RUTA_HOY)
+existe_ant = os.path.exists(RUTA_ANT)
+existe_reub = os.path.exists(RUTA_REUB)
 
 c1, c2, c3 = st.columns(3)
-if hay_hoy:
-    c1.success(f"✅ query-hoy detectado\n\n`{RUTA_QUERY_HOY}`")
+if existe_hoy:
+    c1.success("✅ query-hoy detectado")
 else:
-    c1.error(f"❌ No se encuentra query-hoy\n\n`{RUTA_QUERY_HOY}`")
+    c1.error("❌ No se encuentra query-hoy\n\n`" + RUTA_HOY + "`")
 
-if hay_ant:
-    c2.success(f"✅ query-ant detectado\n\n`{RUTA_QUERY_ANT}`")
+if existe_ant:
+    c2.success("✅ query-ant detectado")
 else:
-    c2.error(f"❌ No se encuentra query-ant\n\n`{RUTA_QUERY_ANT}`")
+    c2.error("❌ No se encuentra query-ant\n\n`" + RUTA_ANT + "`")
 
-if hay_reub:
-    c3.success(f"✅ reubicados detectado\n\n`{RUTA_REUBICADOS}`")
+if existe_reub:
+    c3.success("✅ REUBICADOS.xlsx detectado")
 else:
-    c3.warning(f"⚠️ reubicados no detectado (Opcional)\n\n`{RUTA_REUBICADOS}`")
+    c3.warning("⚠️ reubicados no detectado (Opcional)\n\n`" + RUTA_REUB + "`")
 
-st.markdown("---")
-
-if hay_hoy and hay_ant:
+if existe_hoy and existe_ant:
+    st.write("")
     if st.button("🚀 Procesar y Generar Reporte", type="primary"):
         try:
-            with st.spinner("Leyendo archivos y generando reporte..."):
-                df_hoy_raw = pd.read_excel(RUTA_QUERY_HOY, sheet_name=0, engine='openpyxl')
-                df_ant_raw = pd.read_excel(RUTA_QUERY_ANT, sheet_name=0, engine='openpyxl')
+            with st.spinner("Procesando datos y compilando reporte..."):
+                df_hoy_raw = pd.read_excel(RUTA_HOY, sheet_name=0, engine='openpyxl')
+                df_ant_raw = pd.read_excel(RUTA_ANT, sheet_name=0, engine='openpyxl')
 
                 df_reub_maestro = pd.DataFrame()
-                if hay_reub:
+                if existe_reub:
                     try:
                         try:
-                            df_reub_maestro = pd.read_excel(RUTA_REUBICADOS, sheet_name='REUBICADOS', engine='openpyxl')
+                            df_reub_maestro = pd.read_excel(RUTA_REUB, sheet_name='REUBICADOS', engine='openpyxl')
                         except Exception:
-                            df_reub_maestro = pd.read_excel(RUTA_REUBICADOS, sheet_name=0, engine='openpyxl')
+                            df_reub_maestro = pd.read_excel(RUTA_REUB, sheet_name=0, engine='openpyxl')
                     except Exception as e:
-                        st.warning(f"No se pudo leer el archivo de reubicados: {e}")
+                        st.warning(f"No se pudo leer el maestro de reubicados: {e}")
 
                 df_hoy = normalizar_query(df_hoy_raw)
                 df_ant = normalizar_query(df_ant_raw)
 
+                # Activos del día anterior
                 df_act_ant = df_ant[df_ant['Status ocupación'] == 'Activo'].copy()
                 legs_act_ant = set(df_act_ant['Nº pers.'])
                 legs_hoy = set(df_hoy['Nº pers.'])
 
+                # Altas y Bajas
                 df_alt_r = df_hoy[~df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Activo')].copy()
                 df_baj_r = df_hoy[df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Dado de baja')].copy()
 
@@ -431,6 +446,7 @@ if hay_hoy and hay_ant:
                 if not df_alt_r.empty:
                     df_alt_r = df_alt_r.sort_values(by='Fecha', ascending=True)
 
+                # Reubicados
                 desap_legs = legs_act_ant - legs_hoy
                 df_reub_desap = df_act_ant[df_act_ant['Nº pers.'].isin(desap_legs)].copy()
                 df_reub_completo = procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro)
@@ -480,15 +496,20 @@ if hay_hoy and hay_ant:
                     df_reub_completo, df_recat, df_cambio_l
                 )
 
-                st.success("✅ Reporte procesado exitosamente.")
+                nombre_salida = f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+                # DESCARGA AUTOMÁTICA DIRECTA AL NAVEGADOR
+                descargar_automatico(pdf_bytes, nombre_salida)
+
+                st.success("✅ Reporte procesado y descargado automáticamente.")
                 st.download_button(
-                    "📄 Descargar Reporte Diario de Dotación",
+                    "📄 Descargar copia adicional",
                     pdf_bytes,
-                    f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    nombre_salida,
                     "application/pdf"
                 )
 
         except Exception as e:
             st.error(f"Error al procesar los archivos: {e}")
 else:
-    st.info("💡 Asegurate de que los archivos 'query-hoy' y 'query-ant' existan en tu Escritorio.")
+    st.info("💡 Asegurate de que `query-hoy.xlsx` y `query-ant.xlsx` estén en tu carpeta `Cambio Cat-Linea`.")
