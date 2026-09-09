@@ -2,34 +2,17 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 from datetime import datetime
-import os
-import base64
-import streamlit.components.v1 as components
+import io
 
-# --- FUNCIÓN DE DESCARGA AUTOMÁTICA DIRECTA ---
-def descargar_automatico(datos_bytes, nombre_archivo):
-    b64 = base64.b64encode(datos_bytes).decode()
-    js_code = f"""
-    <script>
-        var a = document.createElement('a');
-        a.href = 'data:application/pdf;base64,{b64}';
-        a.download = '{nombre_archivo}';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    </script>
-    """
-    components.html(js_code, height=0, width=0)
-
-# --- CONFIGURACIÓN DE COLORES Y ESTILOS DEL PDF ---
+# --- 1. CONFIGURACIÓN Y ESTILOS ---
 COLOR_AZUL_INSTITUCIONAL = (4, 118, 208)
 COLOR_FONDO_CABECERA_TABLA = (70, 130, 180)
 COLOR_GRIS_FONDO_FILA = (240, 242, 246)
 COLOR_GRIS_LINEA = (220, 220, 220)
 COLOR_TEXTO_TITULO = (0, 51, 102)
 COLOR_TEXTO_CUERPO = (50, 50, 50)
-COLOR_CELESTE_PASTEL = (186, 225, 255)
-COLOR_AZUL_PASTEL_OSCURO = (120, 180, 235)
+COLOR_CELESTE_PASTEL = (186, 225, 255)       # Celeste pastel para Cambio Categoría
+COLOR_AZUL_PASTEL_OSCURO = (120, 180, 235)  # Celeste/Azul más oscuro para Cambio Línea
 
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
@@ -137,7 +120,7 @@ class PDF(FPDF):
             self.ln()
         self.ln(8)
 
-# --- LÓGICA DE TRANSFORMACIÓN DE DATOS ---
+# --- 2. LÓGICA DE CÁLCULO ---
 def calcular_años(fecha_inicio, fecha_fin):
     if pd.isna(fecha_inicio) or pd.isna(fecha_fin):
         return 0
@@ -301,7 +284,7 @@ def procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro):
 
     return merged[cols_finales]
 
-# --- GENERADOR DE DOCUMENTO PDF ---
+# --- 3. GENERADOR DE PDF ---
 def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas, res_activos, res_bajas_linea, res_bajas_cat, df_reub=None, df_recat=None, df_cambio_linea=None):
     pdf = PDF(orientation='L', unit='mm', format='A4')
     pdf.report_title = "Resumen Diario de Dotación"
@@ -381,135 +364,132 @@ def crear_pdf_reporte_diario(fecha_str, df_altas, df_bajas, res_altas, res_bajas
 
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- INTERFAZ LOCAL DE STREAMLIT ---
+# --- 4. INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Control Diario de Dotación", layout="wide")
 st.title("📋 Control Diario de Dotación")
+st.markdown("Arrastrá o seleccioná los **3 archivos Excel** de una sola vez. Cuando estén listos, presioná el botón.")
 
-# Rutas locales y de red
-RUTA_HOY = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-hoy.xlsx"
-RUTA_ANT = r"C:\Users\florencia.flores\Desktop\Cambio Cat-Linea\query-ant.xlsx"
-RUTA_REUB = r"Q:\GGYDPC\SGyCAPC\Administración del PC\REUBICADOS.xlsx"
+archivos_cargados = st.file_uploader(
+    "📂 Subir archivos (query-hoy, query-ant y reubicados)", 
+    type=['xlsx'], 
+    accept_multiple_files=True
+)
 
-existe_hoy = os.path.exists(RUTA_HOY)
-existe_ant = os.path.exists(RUTA_ANT)
-existe_reub = os.path.exists(RUTA_REUB)
+file_hoy = None
+file_ant = None
+file_reub = None
 
-c1, c2, c3 = st.columns(3)
-if existe_hoy:
-    c1.success("✅ query-hoy detectado")
-else:
-    c1.error("❌ No se encuentra query-hoy\n\n`" + RUTA_HOY + "`")
+if archivos_cargados:
+    for f in archivos_cargados:
+        name = f.name.lower()
+        if "hoy" in name:
+            file_hoy = f
+        elif "ant" in name or "ayer" in name:
+            file_ant = f
+        elif "reub" in name:
+            file_reub = f
 
-if existe_ant:
-    c2.success("✅ query-ant detectado")
-else:
-    c2.error("❌ No se encuentra query-ant\n\n`" + RUTA_ANT + "`")
+    c1, c2, c3 = st.columns(3)
+    c1.info(f"📁 Query Hoy: **{file_hoy.name if file_hoy else '❌ Falta cargar'}**")
+    c2.info(f"📁 Query Ayer: **{file_ant.name if file_ant else '❌ Falta cargar'}**")
+    c3.info(f"📁 Reubicados: **{file_reub.name if file_reub else '⚠️ Opcional / No detectado'}**")
 
-if existe_reub:
-    c3.success("✅ REUBICADOS.xlsx detectado")
-else:
-    c3.warning("⚠️ reubicados no detectado (Opcional)\n\n`" + RUTA_REUB + "`")
+    if file_hoy and file_ant:
+        if st.button("🚀 Procesar y Generar Reporte", type="primary"):
+            try:
+                with st.spinner("Procesando datos y generando reporte..."):
+                    df_hoy_raw = pd.read_excel(file_hoy, sheet_name=0, engine='openpyxl')
+                    df_ant_raw = pd.read_excel(file_ant, sheet_name=0, engine='openpyxl')
 
-if existe_hoy and existe_ant:
-    st.write("")
-    if st.button("🚀 Procesar y Generar Reporte", type="primary"):
-        try:
-            with st.spinner("Procesando datos y compilando reporte..."):
-                df_hoy_raw = pd.read_excel(RUTA_HOY, sheet_name=0, engine='openpyxl')
-                df_ant_raw = pd.read_excel(RUTA_ANT, sheet_name=0, engine='openpyxl')
-
-                df_reub_maestro = pd.DataFrame()
-                if existe_reub:
-                    try:
+                    df_reub_maestro = pd.DataFrame()
+                    if file_reub:
                         try:
-                            df_reub_maestro = pd.read_excel(RUTA_REUB, sheet_name='REUBICADOS', engine='openpyxl')
-                        except Exception:
-                            df_reub_maestro = pd.read_excel(RUTA_REUB, sheet_name=0, engine='openpyxl')
-                    except Exception as e:
-                        st.warning(f"No se pudo leer el maestro de reubicados: {e}")
+                            try:
+                                df_reub_maestro = pd.read_excel(file_reub, sheet_name='REUBICADOS', engine='openpyxl')
+                            except Exception:
+                                df_reub_maestro = pd.read_excel(file_reub, sheet_name=0, engine='openpyxl')
+                        except Exception as e:
+                            st.warning(f"No se pudo leer el archivo maestro de reubicados: {e}")
 
-                df_hoy = normalizar_query(df_hoy_raw)
-                df_ant = normalizar_query(df_ant_raw)
+                    df_hoy = normalizar_query(df_hoy_raw)
+                    df_ant = normalizar_query(df_ant_raw)
 
-                # Activos del día anterior
-                df_act_ant = df_ant[df_ant['Status ocupación'] == 'Activo'].copy()
-                legs_act_ant = set(df_act_ant['Nº pers.'])
-                legs_hoy = set(df_hoy['Nº pers.'])
+                    # Foto de activos anterior
+                    df_act_ant = df_ant[df_ant['Status ocupación'] == 'Activo'].copy()
+                    legs_act_ant = set(df_act_ant['Nº pers.'])
+                    legs_hoy = set(df_hoy['Nº pers.'])
 
-                # Altas y Bajas
-                df_alt_r = df_hoy[~df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Activo')].copy()
-                df_baj_r = df_hoy[df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Dado de baja')].copy()
+                    # Altas y Bajas
+                    df_alt_r = df_hoy[~df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Activo')].copy()
+                    df_baj_r = df_hoy[df_hoy['Nº pers.'].isin(legs_act_ant) & (df_hoy['Status ocupación'] == 'Dado de baja')].copy()
 
-                if not df_baj_r.empty:
-                    df_baj_r['Desde'] = df_baj_r['Desde'] - pd.Timedelta(days=1)
-                    df_baj_r = df_baj_r.sort_values(by='Desde', ascending=True)
-                if not df_alt_r.empty:
-                    df_alt_r = df_alt_r.sort_values(by='Fecha', ascending=True)
+                    if not df_baj_r.empty:
+                        df_baj_r['Desde'] = df_baj_r['Desde'] - pd.Timedelta(days=1)
+                        df_baj_r = df_baj_r.sort_values(by='Desde', ascending=True)
+                    if not df_alt_r.empty:
+                        df_alt_r = df_alt_r.sort_values(by='Fecha', ascending=True)
 
-                # Reubicados
-                desap_legs = legs_act_ant - legs_hoy
-                df_reub_desap = df_act_ant[df_act_ant['Nº pers.'].isin(desap_legs)].copy()
-                df_reub_completo = procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro)
+                    # Reubicados
+                    desap_legs = legs_act_ant - legs_hoy
+                    df_reub_desap = df_act_ant[df_act_ant['Nº pers.'].isin(desap_legs)].copy()
+                    df_reub_completo = procesar_reubicados_con_maestro(df_reub_desap, df_reub_maestro)
 
-                hoy = pd.to_datetime(datetime.now())
+                    hoy = pd.to_datetime(datetime.now())
 
-                df_baj = df_baj_r.copy()
-                if not df_baj.empty:
-                    df_baj['Antigüedad'] = df_baj.apply(lambda r: calcular_años(r['Fecha'], r['Desde']), axis=1)
-                    df_baj['Edad'] = df_baj.apply(lambda r: calcular_años(r['Fecha nac.'], r['Desde']), axis=1)
-                    df_baj_vis = df_baj.copy()
-                    df_baj_vis['Antigüedad'] = df_baj_vis['Antigüedad'].apply(lambda x: int(round(x)))
-                    df_baj_vis['Fecha nac.'] = df_baj_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')
-                    df_baj_vis['Desde_DT'] = df_baj_vis['Desde']
-                    df_baj_vis['Desde'] = df_baj_vis['Desde'].dt.strftime('%d/%m/%Y')
-                else:
-                    df_baj_vis = pd.DataFrame()
+                    df_baj = df_baj_r.copy()
+                    if not df_baj.empty:
+                        df_baj['Antigüedad'] = df_baj.apply(lambda r: calcular_años(r['Fecha'], r['Desde']), axis=1)
+                        df_baj['Edad'] = df_baj.apply(lambda r: calcular_años(r['Fecha nac.'], r['Desde']), axis=1)
+                        df_baj_vis = df_baj.copy()
+                        df_baj_vis['Antigüedad'] = df_baj_vis['Antigüedad'].apply(lambda x: int(round(x)))
+                        df_baj_vis['Fecha nac.'] = df_baj_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')
+                        df_baj_vis['Desde_DT'] = df_baj_vis['Desde']
+                        df_baj_vis['Desde'] = df_baj_vis['Desde'].dt.strftime('%d/%m/%Y')
+                    else:
+                        df_baj_vis = pd.DataFrame()
 
-                df_alt = df_alt_r.copy()
-                if not df_alt.empty:
-                    df_alt['Antigüedad'] = df_alt.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)
-                    df_alt['Edad'] = df_alt.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)
-                    df_alt_vis = df_alt.copy()
-                    df_alt_vis['Fecha'] = df_alt_vis['Fecha'].dt.strftime('%d/%m/%Y')
-                    df_alt_vis['Fecha nac.'] = df_alt_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')
-                else:
-                    df_alt_vis = pd.DataFrame()
+                    df_alt = df_alt_r.copy()
+                    if not df_alt.empty:
+                        df_alt['Antigüedad'] = df_alt.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)
+                        df_alt['Edad'] = df_alt.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)
+                        df_alt_vis = df_alt.copy()
+                        df_alt_vis['Fecha'] = df_alt_vis['Fecha'].dt.strftime('%d/%m/%Y')
+                        df_alt_vis['Fecha nac.'] = df_alt_vis['Fecha nac.'].dt.strftime('%d/%m/%Y')
+                    else:
+                        df_alt_vis = pd.DataFrame()
 
-                df_recat = procesar_recategorizaciones(df_hoy, df_act_ant)
-                df_cambio_l = procesar_cambios_linea(df_hoy, df_act_ant)
+                    df_recat = procesar_recategorizaciones(df_hoy, df_act_ant)
+                    df_cambio_l = procesar_cambios_linea(df_hoy, df_act_ant)
 
-                df_act_hoy = df_hoy[df_hoy['Status ocupación'] == 'Activo'].copy()
-                df_act_hoy['Antigüedad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)
-                df_act_hoy['Edad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)
+                    df_act_hoy = df_hoy[df_hoy['Status ocupación'] == 'Activo'].copy()
+                    df_act_hoy['Antigüedad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha'], hoy), axis=1)
+                    df_act_hoy['Edad'] = df_act_hoy.apply(lambda r: calcular_años(r['Fecha nac.'], hoy), axis=1)
 
-                res_act = generar_resumen_completo(df_act_hoy)
-                res_alt = generar_resumen_completo(df_alt, incluir_promedios=False)
-                res_baj = generar_resumen_completo(df_baj)
-                res_baj_linea = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Línea'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()
-                res_baj_cat = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Categoría'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()
+                    res_act = generar_resumen_completo(df_act_hoy)
+                    res_alt = generar_resumen_completo(df_alt, incluir_promedios=False)
+                    res_baj = generar_resumen_completo(df_baj)
+                    res_baj_linea = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Línea'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()
+                    res_baj_cat = pd.crosstab(df_baj['Motivo de Baja'], df_baj['Categoría'], margins=True, margins_name="Total") if not df_baj.empty else pd.DataFrame()
 
-                pdf_bytes = crear_pdf_reporte_diario(
-                    datetime.now().strftime('%d/%m/%Y'),
-                    df_alt_vis, df_baj_vis,
-                    res_alt, res_baj, res_act,
-                    res_baj_linea, res_baj_cat,
-                    df_reub_completo, df_recat, df_cambio_l
-                )
+                    pdf_bytes = crear_pdf_reporte_diario(
+                        datetime.now().strftime('%d/%m/%Y'),
+                        df_alt_vis, df_baj_vis,
+                        res_alt, res_baj, res_act,
+                        res_baj_linea, res_baj_cat,
+                        df_reub_completo, df_recat, df_cambio_l
+                    )
 
-                nombre_salida = f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf"
+                    st.success("✅ Reporte generado exitosamente.")
+                    st.download_button(
+                        "📄 Descargar Reporte Diario de Dotación",
+                        pdf_bytes,
+                        f"Reporte_Diario_Dotacion_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        "application/pdf"
+                    )
 
-                # DESCARGA AUTOMÁTICA DIRECTA AL NAVEGADOR
-                descargar_automatico(pdf_bytes, nombre_salida)
-
-                st.success("✅ Reporte procesado y descargado automáticamente.")
-                st.download_button(
-                    "📄 Descargar copia adicional",
-                    pdf_bytes,
-                    nombre_salida,
-                    "application/pdf"
-                )
-
-        except Exception as e:
-            st.error(f"Error al procesar los archivos: {e}")
+            except Exception as e:
+                st.error(f"Error al procesar los archivos: {e}")
+    else:
+        st.warning("⚠️ Asegurate de haber subido los archivos de **hoy** y **ayer**.")
 else:
-    st.info("💡 Asegurate de que `query-hoy.xlsx` y `query-ant.xlsx` estén en tu carpeta `Cambio Cat-Linea`.")
+    st.info("💡 Arrastrá los 3 archivos aquí para comenzar.")
